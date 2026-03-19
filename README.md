@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="./assets/voyager-banner.svg" alt="Voyager banner" />
+</p>
+
+<p align="center">
   <strong>Voyager</strong> · X Tweet Tracker
 </p>
 
