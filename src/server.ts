@@ -84,6 +84,13 @@ app.listen(PORT, '0.0.0.0', () => {
 
 // Telegram bot webhook endpoint
 const bot = createTelegramBot();
+
+// grammY requires bot.init() in webhook-only mode
+bot.init().then(
+  () => console.log('Telegram bot initialized'),
+  (e) => console.error('Telegram bot init failed', e),
+);
+
 app.post('/telegram/webhook', async (req, res) => {
   try {
     await bot.handleUpdate(req.body);
