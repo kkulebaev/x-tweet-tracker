@@ -2,6 +2,11 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { mustEnv } from './env.js';
 import { prisma } from './prisma.js';
 
+function isMessageNotModifiedError(e: unknown) {
+  const msg = String((e as any)?.description ?? (e as any)?.message ?? '').toLowerCase();
+  return msg.includes('message is not modified');
+}
+
 function mustAdmin(ctxFromId: number | undefined) {
   const adminId = Number(mustEnv('TELEGRAM_ADMIN_USER_ID'));
   if (!ctxFromId || Number(ctxFromId) !== adminId) {
@@ -11,12 +16,46 @@ function mustAdmin(ctxFromId: number | undefined) {
   }
 }
 
+function normalizeUsername(s: string) {
+  return s.trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '');
+}
+
 function parseUsernamesFromText(text: string) {
   return text
     .split(/[\s,]+/g)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => s.replace(/^@/, ''));
+    .map(normalizeUsername)
+    .filter(Boolean);
+}
+
+async function renderAccountsMessage() {
+  const accounts = await prisma.account.findMany({ orderBy: { createdAt: 'asc' } });
+
+  const header = '🚀 <b>Voyager</b> — трекер X\n';
+  if (accounts.length === 0) {
+    return {
+      text: header + '\nСписок пуст. Добавь аккаунт командой:\n<code>/add boshen_c</code>',
+      keyboard: new InlineKeyboard().text('➕ Добавить', 'ui:add').row().text('▶️ Запустить сбор', 'ui:run'),
+    };
+  }
+
+  const lines = accounts.map((a, idx) => {
+    const st = a.enabled ? '✅' : '⛔';
+    return `${idx + 1}. ${st} <b>@${a.xUsername}</b>`;
+  });
+
+  // One row per account: toggle + delete
+  const kb = new InlineKeyboard();
+  accounts.forEach((a) => {
+    kb.text(a.enabled ? '⛔ Выкл' : '✅ Вкл', `acc:toggle:${a.id}`).text('🗑', `acc:delask:${a.id}`).row();
+  });
+
+  kb.text('🔄 Обновить', 'ui:list').text('▶️ Запустить сбор', 'ui:run').row();
+  kb.text('➕ Добавить', 'ui:add');
+
+  return {
+    text: header + '\n' + lines.join('\n'),
+    keyboard: kb,
+  };
 }
 
 export function createTelegramBot() {
@@ -29,30 +68,26 @@ export function createTelegramBot() {
 
   bot.command('start', async (ctx) => {
     mustAdmin(ctx.from?.id);
-    await ctx.reply('Voyager — x-tweet-tracker admin bot\n\nCommands:\n/list — list accounts\n/add <usernames> — add accounts\n/run — run worker now');
+    const { text, keyboard } = await renderAccountsMessage();
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+  });
+
+  bot.command('help', async (ctx) => {
+    mustAdmin(ctx.from?.id);
+    await ctx.reply(
+      '🛰️ <b>Voyager</b> — админка\n\n' +
+        'Команды:\n' +
+        '<code>/list</code> — список аккаунтов\n' +
+        '<code>/add boshen_c elonmusk</code> — добавить (можно несколько)\n' +
+        '<code>/run</code> — запустить сбор вручную',
+      { parse_mode: 'HTML' },
+    );
   });
 
   bot.command('list', async (ctx) => {
     mustAdmin(ctx.from?.id);
-
-    const accounts = await prisma.account.findMany({ orderBy: { createdAt: 'asc' } });
-
-    if (accounts.length === 0) {
-      await ctx.reply('No accounts yet. Use /add boshen_c');
-      return;
-    }
-
-    const lines = accounts.map((a) => {
-      const st = a.enabled ? '✅' : '⛔';
-      const sid = a.sinceId ? ` since:${a.sinceId}` : '';
-      return `${st} @${a.xUsername}${sid}`;
-    });
-
-    const kb = new InlineKeyboard();
-    kb.text('🔄 Refresh', 'a:list');
-    kb.text('▶️ Run now', 'a:run');
-
-    await ctx.reply(lines.join('\n'), { reply_markup: kb });
+    const { text, keyboard } = await renderAccountsMessage();
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
   });
 
   bot.command('add', async (ctx) => {
@@ -60,7 +95,7 @@ export function createTelegramBot() {
     const text = String(ctx.match ?? '').trim();
     const names = parseUsernamesFromText(text);
     if (names.length === 0) {
-      await ctx.reply('Usage: /add boshen_c elonmusk');
+      await ctx.reply('Формат: <code>/add boshen_c elonmusk</code>', { parse_mode: 'HTML' });
       return;
     }
 
@@ -74,15 +109,27 @@ export function createTelegramBot() {
       created.push(a.xUsername);
     }
 
-    await ctx.reply(`Added/enabled: ${created.map((x) => '@' + x).join(', ')}`);
+    const { text: listText, keyboard } = await renderAccountsMessage();
+    await ctx.reply(`✅ Добавил/включил: ${created.map((x) => '@' + x).join(', ')}`, { parse_mode: 'HTML' });
+    await ctx.reply(listText, { parse_mode: 'HTML', reply_markup: keyboard });
   });
 
   bot.command('run', async (ctx) => {
     mustAdmin(ctx.from?.id);
-    await ctx.reply('Running…');
+    await ctx.reply('⏳ Запускаю сбор…');
     const { runWorkerOnce } = await import('./worker.js');
     const r = await runWorkerOnce();
-    await ctx.reply(`Done. accounts: ${r.accountsProcessed}/${r.accountsTotal}, tweets inserted: ${r.tweetsInserted}, errors: ${r.errors.length}`);
+
+    const errLines = r.errors.slice(0, 5).map((e) => `- @${e.xUsername}: ${e.error}`).join('\n');
+    const errBlock = r.errors.length ? `\n\nОшибки (первые 5):\n${errLines}` : '';
+
+    await ctx.reply(
+      `✅ Готово\n` +
+        `Аккаунтов: ${r.accountsProcessed}/${r.accountsTotal}\n` +
+        `Сохранено твитов: ${r.tweetsInserted}\n` +
+        `Ошибок: ${r.errors.length}` +
+        errBlock,
+    );
   });
 
   bot.on('callback_query:data', async (ctx) => {
@@ -90,29 +137,84 @@ export function createTelegramBot() {
     const data = String(ctx.callbackQuery.data);
     await ctx.answerCallbackQuery();
 
-    if (data === 'a:list') {
-      // Reuse /list rendering
-      const accounts = await prisma.account.findMany({ orderBy: { createdAt: 'asc' } });
-      const lines = accounts.length
-        ? accounts.map((a) => `${a.enabled ? '✅' : '⛔'} @${a.xUsername}${a.sinceId ? ` since:${a.sinceId}` : ''}`).join('\n')
-        : 'No accounts yet. Use /add boshen_c';
-
-      const kb = new InlineKeyboard();
-      kb.text('🔄 Refresh', 'a:list');
-      kb.text('▶️ Run now', 'a:run');
-
+    // Simple UI actions
+    if (data === 'ui:list') {
+      const { text, keyboard } = await renderAccountsMessage();
       if (ctx.callbackQuery.message) {
-        await ctx.editMessageText(lines, { reply_markup: kb });
+        try {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (e) {
+          if (!isMessageNotModifiedError(e)) throw e;
+        }
       }
       return;
     }
 
-    if (data === 'a:run') {
+    if (data === 'ui:run') {
       const { runWorkerOnce } = await import('./worker.js');
       const r = await runWorkerOnce();
-      const msg = `Done. accounts: ${r.accountsProcessed}/${r.accountsTotal}, tweets inserted: ${r.tweetsInserted}, errors: ${r.errors.length}`;
+      const msg = `✅ Готово: аккаунтов ${r.accountsProcessed}/${r.accountsTotal}, твитов ${r.tweetsInserted}, ошибок ${r.errors.length}`;
       if (ctx.callbackQuery.message) {
-        await ctx.editMessageText(msg);
+        try {
+          await ctx.editMessageText(msg);
+        } catch (e) {
+          if (!isMessageNotModifiedError(e)) throw e;
+        }
+      }
+      return;
+    }
+
+    if (data === 'ui:add') {
+      await ctx.reply('Пришли командой: <code>/add boshen_c elonmusk</code>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    // Per-account actions
+    if (data.startsWith('acc:toggle:')) {
+      const id = data.split(':')[2];
+      const acc = await prisma.account.findUnique({ where: { id } });
+      if (!acc) return;
+      await prisma.account.update({ where: { id }, data: { enabled: !acc.enabled } });
+
+      const { text, keyboard } = await renderAccountsMessage();
+      if (ctx.callbackQuery.message) {
+        try {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (e) {
+          if (!isMessageNotModifiedError(e)) throw e;
+        }
+      }
+      return;
+    }
+
+    if (data.startsWith('acc:delask:')) {
+      const id = data.split(':')[2];
+      const acc = await prisma.account.findUnique({ where: { id } });
+      if (!acc || !ctx.callbackQuery.message) return;
+
+      const kb = new InlineKeyboard()
+        .text('🗑 Удалить', `acc:delyes:${id}`)
+        .text('❌ Отмена', 'ui:list');
+
+      try {
+        await ctx.editMessageText(`Удалить <b>@${acc.xUsername}</b>?`, { parse_mode: 'HTML', reply_markup: kb });
+      } catch (e) {
+        if (!isMessageNotModifiedError(e)) throw e;
+      }
+      return;
+    }
+
+    if (data.startsWith('acc:delyes:')) {
+      const id = data.split(':')[2];
+      await prisma.account.delete({ where: { id } }).catch(() => {});
+
+      const { text, keyboard } = await renderAccountsMessage();
+      if (ctx.callbackQuery.message) {
+        try {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (e) {
+          if (!isMessageNotModifiedError(e)) throw e;
+        }
       }
       return;
     }
