@@ -114,7 +114,6 @@ export function createTelegramBot() {
 
     const kb = new InlineKeyboard();
     kb.text(acc.enabled ? '⛔ Выключить' : '✅ Включить', `acc:toggle:${acc.id}`).row();
-    kb.text('▶️ Запустить сбор', `acc:run:${acc.id}`).row();
     kb.text('🗑 Удалить', `acc:delask:${acc.id}`).row();
     kb.text('⬅️ Назад к списку', 'ui:list');
 
@@ -300,33 +299,6 @@ export function createTelegramBot() {
         await ctx.editMessageText(`Удалить <b>@${acc.xUsername}</b>?`, { parse_mode: 'HTML', reply_markup: kb });
       } catch (e) {
         if (!isMessageNotModifiedError(e)) throw e;
-      }
-      return;
-    }
-
-    if (data.startsWith('acc:run:')) {
-      const id = data.split(':')[2];
-      const acc = await prisma.account.findUnique({ where: { id } });
-      if (!acc) return;
-
-      const { runWorkerOnce } = await import('./worker.js');
-      const r = await runWorkerOnce();
-
-      const msg =
-        `✅ Сбор запущен\n` +
-        `Аккаунтов: ${r.accountsProcessed}/${r.accountsTotal}\n` +
-        `Твитов сохранено: ${r.tweetsInserted}\n` +
-        `Ошибок: ${r.errors.length}`;
-
-      const { text, keyboard } = await renderAccountCard(id);
-      const full = msg + `\n\n` + text;
-
-      if (ctx.callbackQuery.message) {
-        try {
-          await ctx.editMessageText(full, { parse_mode: 'HTML', reply_markup: keyboard });
-        } catch (e) {
-          if (!isMessageNotModifiedError(e)) throw e;
-        }
       }
       return;
     }
