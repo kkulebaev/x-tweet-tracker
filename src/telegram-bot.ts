@@ -17,7 +17,30 @@ function mustAdmin(ctxFromId: number | undefined) {
 }
 
 function normalizeUsername(s: string) {
-  return s.trim().replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '');
+  const raw = s.trim();
+  if (!raw) return '';
+
+  // Allow pasting profile links like:
+  // https://x.com/webstandards_ru?s=21&t=...
+  // https://twitter.com/webstandards_ru
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      const u = new URL(raw);
+      const host = u.hostname.replace(/^www\./, '').toLowerCase();
+      if (host === 'x.com' || host === 'twitter.com') {
+        const parts = u.pathname.split('/').filter(Boolean);
+        const first = parts[0] ?? '';
+        // ignore non-profile paths
+        if (first && !['home', 'i', 'intent', 'search', 'hashtag', 'share'].includes(first.toLowerCase())) {
+          return first.replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '');
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return raw.replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '');
 }
 
 function parseUsernamesFromText(text: string) {
