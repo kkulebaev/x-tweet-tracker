@@ -140,6 +140,65 @@ app.get('/admin/tweets', adminAuth(), async (req, res) => {
   res.json({ ok: true, tweets });
 });
 
+// --- Telegram forwarder queue endpoints ---
+
+// Atomically claim the next unsent tweet (oldest first).
+// Returns { tweet, account } or { tweet: null }.
+app.post('/admin/tweets/claim', adminAuth(), async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.body?.limit ?? 1), 1), 5);
+  if (limit !== 1) {
+    // Keep MVP simple and deterministic.
+    return res.status(400).json({ ok: false, error: 'Only limit=1 is supported' });
+  }
+
+  const rows = await prisma.$queryRawUnsafe<any[]>(
+    `
+    WITH cte AS (
+      SELECT t.tweet_id
+      FROM tweets t
+      WHERE t.sent_to_telegram_at IS NULL
+        AND t.claimed_at IS NULL
+      ORDER BY t.created_at ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE tweets t
+      SET claimed_at = now()
+    FROM cte
+    WHERE t.tweet_id = cte.tweet_id
+    RETURNING t.*;
+  `,
+  );
+
+  if (!rows.length) {
+    return res.json({ ok: true, tweet: null });
+  }
+
+  const tweet = rows[0];
+  const account = await prisma.account.findUnique({ where: { id: tweet.account_id } });
+  return res.json({ ok: true, tweet, account });
+});
+
+// Mark tweet as sent (idempotent)
+app.post('/admin/tweets/:tweetId/mark-sent', adminAuth(), async (req, res) => {
+  const tweetId = String(req.params.tweetId);
+  const t = await prisma.tweet.findUnique({ where: { tweetId } });
+  if (!t) return res.status(404).json({ ok: false, error: 'Tweet not found' });
+
+  if (t.sentAt) {
+    return res.json({ ok: true, alreadySent: true, tweetId });
+  }
+
+  await prisma.tweet.update({
+    where: { tweetId },
+    data: {
+      sentAt: new Date(),
+    },
+  });
+
+  return res.json({ ok: true, tweetId });
+});
+
 const PORT = Number(process.env.PORT ?? 3000);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`x-tweet-tracker-api listening on 0.0.0.0:${PORT}`);
