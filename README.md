@@ -48,6 +48,10 @@ Tweets:
 - `DATABASE_URL` — Railway Postgres connection string
 - `ADMIN_TOKEN` — bearer token for admin endpoints
 
+Kafka (optional):
+- `KAFKA_BROKER` or `KAFKA_BROKERS` — e.g. `INTERNAL://kafka.railway.internal:29092`
+- `KAFKA_TOPIC` — default: `voyager.tweets`
+
 > No `X_BEARER_TOKEN` here: X API calls live in the cron service.
 
 ## Local development
