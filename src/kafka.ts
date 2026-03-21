@@ -1,5 +1,10 @@
 import { Kafka, logLevel } from 'kafkajs';
 
+function kafkaLogLevel() {
+  // In production we want warnings/errors, but avoid noisy debug logs
+  return process.env.NODE_ENV === 'production' ? logLevel.WARN : logLevel.INFO;
+}
+
 function env(key: string) {
   return (process.env[key] ?? '').trim();
 }
@@ -20,9 +25,9 @@ const broker = normalizeBroker(env('KAFKA_BROKER'));
 const brokers = broker ? [broker] : [];
 
 const kafka = new Kafka({
-  clientId: env('KAFKA_CLIENT_ID') || 'x-tweet-tracker-api',
+  clientId: 'x-tweet-tracker-api',
   brokers,
-  logLevel: logLevel.NOTHING,
+  logLevel: kafkaLogLevel(),
 });
 
 let producerPromise: Promise<ReturnType<typeof kafka.producer>> | null = null;
