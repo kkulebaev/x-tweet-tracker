@@ -33,13 +33,27 @@ const kafka = new Kafka({
 let producerPromise: Promise<ReturnType<typeof kafka.producer>> | null = null;
 let topicEnsured = false;
 
+function formatKafkaError(e: unknown) {
+  const anyE = e as any;
+  return {
+    name: anyE?.name,
+    message: anyE?.message ?? String(e),
+    type: anyE?.type,
+    code: anyE?.code,
+    retriable: anyE?.retriable,
+    helpUrl: anyE?.helpUrl,
+    broker: anyE?.broker,
+    stack: anyE?.stack,
+  };
+}
+
 async function ensureTopic() {
   if (topicEnsured) return;
 
   const admin = kafka.admin();
   await admin.connect();
   try {
-    await admin.createTopics({
+    const ok = await admin.createTopics({
       waitForLeaders: true,
       topics: [
         {
@@ -49,14 +63,19 @@ async function ensureTopic() {
         },
       ],
     });
+
+    console.log('kafka ensureTopic result', { topic: TOPIC, created: ok });
     topicEnsured = true;
   } catch (e) {
-    // If topic already exists, treat as success
     const msg = String((e as any)?.message ?? e).toLowerCase();
+    // If topic already exists, treat as success
     if (msg.includes('topic') && msg.includes('exists')) {
+      console.log('kafka ensureTopic: already exists', { topic: TOPIC });
       topicEnsured = true;
       return;
     }
+
+    console.error('kafka ensureTopic failed', { topic: TOPIC, error: formatKafkaError(e) });
     throw e;
   } finally {
     await admin.disconnect().catch(() => {});
@@ -89,13 +108,18 @@ export async function publishTweets(events: KafkaTweetEvent[]) {
 
   const producer = await getProducer();
 
-  await producer.send({
-    topic: TOPIC,
-    messages: events.map((e) => ({
-      key: e.tweetId,
-      value: JSON.stringify(e),
-    })),
-  });
+  try {
+    await producer.send({
+      topic: TOPIC,
+      messages: events.map((e) => ({
+        key: e.tweetId,
+        value: JSON.stringify(e),
+      })),
+    });
+  } catch (e) {
+    console.error('kafka publish failed', { topic: TOPIC, count: events.length, error: formatKafkaError(e) });
+    throw e;
+  }
 
   return { ok: true, sent: events.length };
 }
