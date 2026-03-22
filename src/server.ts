@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import { mustEnv } from './env.js';
 import { prisma } from './prisma.js';
-import { publishTweets, type KafkaTweetEvent } from './kafka.js';
+import { publishTweetsToStream, type RedisTweetEvent } from './redis.js';
 
 function adminAuth() {
   const expected = mustEnv('ADMIN_TOKEN');
@@ -86,7 +86,7 @@ app.post('/admin/tweets/push', adminAuth(), async (req, res) => {
   if (!account) return res.status(404).json({ ok: false, error: 'Account not found' });
 
   let inserted = 0;
-  const kafkaEvents: KafkaTweetEvent[] = [];
+  const events: RedisTweetEvent[] = [];
 
   // Insert oldest -> newest for stable results
   const sorted = [...tweets].sort((a, b) => String(a.id).localeCompare(String(b.id)));
@@ -117,7 +117,7 @@ app.post('/admin/tweets/push', adminAuth(), async (req, res) => {
       },
     });
 
-    kafkaEvents.push({
+    events.push({
       type: 'tweet.upserted',
       tweetId: id,
       accountId,
@@ -134,11 +134,11 @@ app.post('/admin/tweets/push', adminAuth(), async (req, res) => {
     await prisma.account.update({ where: { id: accountId }, data: { sinceId: newestId } });
   }
 
-  // Best-effort Kafka publish (does not fail the request)
+  // Best-effort publish to Redis stream (does not fail the request)
   try {
-    await publishTweets(kafkaEvents);
+    await publishTweetsToStream(events);
   } catch (e) {
-    console.warn('Kafka publish failed', String((e as any)?.message ?? e));
+    console.warn('Redis publish failed', String((e as any)?.message ?? e));
   }
 
   res.json({ ok: true, inserted, accountId, newestId });

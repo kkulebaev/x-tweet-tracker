@@ -48,8 +48,12 @@ Tweets:
 - `DATABASE_URL` — Railway Postgres connection string
 - `ADMIN_TOKEN` — bearer token for admin endpoints
 
-Kafka (optional):
-- `KAFKA_BROKER` — e.g. `INTERNAL://kafka.railway.internal:29092` (keyed by `tweetId`, topic: `voyager.tweets`)
+Redis Streams (optional):
+- `REDIS_URL` — Railway Redis connection string
+
+Stream:
+- key: `voyager:tweets`
+- fields: `tweetId`, `payload` (JSON)
 
 > No `X_BEARER_TOKEN` here: X API calls live in the cron service.
 
